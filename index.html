@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Neon Pocket Platformer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game" aria-label="Platformer game canvas"></canvas>
+
+    <div id="ui">
+      <div id="titleScreen" class="panel">
+        <h1>Neon Pocket Platformer</h1>
+        <p class="sub">One level. Mobile + PC controls auto-detected.</p>
+        <button id="playBtn">Play</button>
+        <div class="hint" id="hintText"></div>
+      </div>
+
+      <div id="hud" class="hud hidden">
+        <div class="pill" id="statusPill">Level 1</div>
+        <div class="pill" id="coinPill">💠 0</div>
+      </div>
+
+      <div id="mobileControls" class="mobile-controls hidden" aria-hidden="true">
+        <div class="mc-left">
+          <button class="mc-btn" id="btnLeft" aria-label="Move left">◀</button>
+          <button class="mc-btn" id="btnRight" aria-label="Move right">▶</button>
+        </div>
+        <div class="mc-right">
+          <button class="mc-btn big" id="btnJump" aria-label="Jump">⤒</button>
+        </div>
+      </div>
+
+      <div id="overlayMsg" class="overlay hidden"></div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
