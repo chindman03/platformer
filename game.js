@@ -1,8 +1,8 @@
-/* Neon Pocket Platformer
-   - Canvas + pixel art scaling
-   - Auto-detect touch vs keyboard
-   - Simple physics + AABB collisions
-   - 1 level with platforms, coins, and patrolling enemies
+/* Neon Pocket Platformer (v2)
+   Improvements:
+   - Better-looking level flow (varied heights + pacing)
+   - Moving platforms + spike hazards (spikes never embedded in ground)
+   - Sword attack (keyboard + mobile button) with attack frame + hitbox
 */
 
 (() => {
@@ -28,15 +28,13 @@
   const ctx = canvas.getContext("2d", { alpha: false });
   ctx.imageSmoothingEnabled = false;
 
-  // Render size (in game pixels) scales to device
-  const BASE_W = 384; // good for mobile portrait/landscape
-  const BASE_H = 216; // 16:9-ish
+  const BASE_W = 384;
+  const BASE_H = 216;
   let viewW = BASE_W, viewH = BASE_H, dpr = 1;
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
     dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
-    // Keep game pixels consistent by choosing an integer scale
     const scale = Math.max(1, Math.floor(Math.min(rect.width / BASE_W, rect.height / BASE_H)));
     viewW = Math.floor(rect.width / scale);
     viewH = Math.floor(rect.height / scale);
@@ -79,40 +77,43 @@
   const btnLeft = document.getElementById("btnLeft");
   const btnRight = document.getElementById("btnRight");
   const btnJump = document.getElementById("btnJump");
+  const btnAttack = document.getElementById("btnAttack");
 
   const touchMode = isTouchDevice();
   hintText.textContent = touchMode
-    ? "Touch controls: ◀ ▶ to move, ⤒ to jump. Goal: reach the neon gate (right side)."
-    : "Keyboard: A/D or ←/→ to move, W/Space/↑ to jump. Goal: reach the neon gate (right side).";
+    ? "Touch: ◀ ▶ move, ⚔ attack, ⤒ jump. Stomp or slash enemies. Avoid spikes. Reach the neon gate."
+    : "Keyboard: A/D or ←/→ move • W/Space/↑ jump • J / K / X attack. Stomp or slash enemies. Avoid spikes. Reach the neon gate.";
 
   // ---------- Input ----------
   const input = {
     left: false,
     right: false,
+
     jumpPressed: false,   // edge
     jumpHeld: false,
     jumpBuffer: 0,
-    jumpBufferMax: 0.12,  // seconds
+    jumpBufferMax: 0.12,
+
+    atkPressed: false,    // edge
+    atkHeld: false,
+    atkBuffer: 0,
+    atkBufferMax: 0.10,
   };
 
-  function setBtnHeld(btn, key, held) {
-    input[key] = held;
-  }
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
   function setupMobileControls() {
     mobileControls.classList.remove("hidden");
     mobileControls.setAttribute("aria-hidden", "false");
 
     const bindHold = (el, key) => {
-      const down = (e) => { e.preventDefault(); setBtnHeld(el, key, true); };
-      const up = (e) => { e.preventDefault(); setBtnHeld(el, key, false); };
+      const down = (e) => { e.preventDefault(); input[key] = true; };
+      const up = (e) => { e.preventDefault(); input[key] = false; };
 
       el.addEventListener("pointerdown", down, { passive: false });
       el.addEventListener("pointerup", up, { passive: false });
       el.addEventListener("pointercancel", up, { passive: false });
       el.addEventListener("pointerout", (e) => {
-        // when finger drifts off button, keep held only if pointer is still down on element.
-        // simplest: release
         if (e.pointerType !== "mouse") up(e);
       }, { passive: false });
     };
@@ -120,19 +121,40 @@
     bindHold(btnLeft, "left");
     bindHold(btnRight, "right");
 
-    const downJump = (e) => { e.preventDefault(); input.jumpHeld = true; input.jumpPressed = true; input.jumpBuffer = input.jumpBufferMax; };
+    const downJump = (e) => {
+      e.preventDefault();
+      input.jumpHeld = true;
+      input.jumpPressed = true;
+      input.jumpBuffer = input.jumpBufferMax;
+    };
     const upJump = (e) => { e.preventDefault(); input.jumpHeld = false; };
 
     btnJump.addEventListener("pointerdown", downJump, { passive: false });
     btnJump.addEventListener("pointerup", upJump, { passive: false });
     btnJump.addEventListener("pointercancel", upJump, { passive: false });
+
+    const downAtk = (e) => {
+      e.preventDefault();
+      if (!input.atkHeld) {
+        input.atkPressed = true;
+        input.atkBuffer = input.atkBufferMax;
+      }
+      input.atkHeld = true;
+    };
+    const upAtk = (e) => { e.preventDefault(); input.atkHeld = false; };
+
+    btnAttack.addEventListener("pointerdown", downAtk, { passive: false });
+    btnAttack.addEventListener("pointerup", upAtk, { passive: false });
+    btnAttack.addEventListener("pointercancel", upAtk, { passive: false });
   }
 
   function setupKeyboard() {
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
+
       if (["arrowleft","a"].includes(k)) input.left = true;
       if (["arrowright","d"].includes(k)) input.right = true;
+
       if (["arrowup","w"," "].includes(k)) {
         if (!input.jumpHeld) {
           input.jumpPressed = true;
@@ -140,8 +162,16 @@
         }
         input.jumpHeld = true;
       }
-      // prevent page scrolling with arrows/space
-      if (["arrowleft","arrowright","arrowup"," "].includes(k)) e.preventDefault();
+
+      if (["j","k","x","z"].includes(k)) {
+        if (!input.atkHeld) {
+          input.atkPressed = true;
+          input.atkBuffer = input.atkBufferMax;
+        }
+        input.atkHeld = true;
+      }
+
+      if (["arrowleft","arrowright","arrowup"," ","j","k","x","z"].includes(k)) e.preventDefault();
     }, { passive: false });
 
     window.addEventListener("keyup", (e) => {
@@ -149,72 +179,98 @@
       if (["arrowleft","a"].includes(k)) input.left = false;
       if (["arrowright","d"].includes(k)) input.right = false;
       if (["arrowup","w"," "].includes(k)) input.jumpHeld = false;
+      if (["j","k","x","z"].includes(k)) input.atkHeld = false;
     }, { passive: true });
   }
 
   // ---------- Sprites ----------
-  // The sheet has sprites packed near the top-left.
-  // We use 16x16 frames and scale them up when drawing.
   const SPR = 16;
 
   const SPRITES = {
     playerIdle: [
       { x: 16, y: 0 }, { x: 32, y: 0 }, { x: 48, y: 0 }, { x: 64, y: 0 }
     ],
-    playerAttack: [{ x: 0, y: 16 }], // larger-ish, still 16x16, looks like sword swing
+    playerAttack: [
+      { x: 0, y: 16 }, { x: 16, y: 16 }
+    ],
     enemyIdle: [
       { x: 160, y: 0 }, { x: 176, y: 0 }, { x: 192, y: 0 }, { x: 208, y: 0 }, { x: 224, y: 0 }
     ],
     coin: [{ x: 0, y: 32 }, { x: 16, y: 32 }, { x: 32, y: 32 }, { x: 48, y: 32 }, { x: 64, y: 32 }],
   };
 
-  // Environment sheet (new_ground_objects.png)
-  // We'll use these source rects:
+  // Environment sheet (64x64)
   const ENV = {
-    block: { sx: 0, sy: 0, sw: 16, sh: 16 },         // top-left small block
-    block2: { sx: 0, sy: 16, sw: 16, sh: 16 },        // below it
-    platform: { sx: 16, sy: 0, sw: 48, sh: 32 },      // big platform
-    rock1: { sx: 0, sy: 32, sw: 32, sh: 16 },
+    blockA: { sx: 0, sy: 0, sw: 16, sh: 16 },
+    blockB: { sx: 16, sy: 0, sw: 16, sh: 16 },
+    blockC: { sx: 32, sy: 0, sw: 16, sh: 16 },
+    blockD: { sx: 48, sy: 0, sw: 16, sh: 16 },
+    blockF: { sx: 16, sy: 16, sw: 16, sh: 16 },
+    spikeFull: { sx: 0, sy: 32, sw: 16, sh: 16 },
   };
 
-  // ---------- World / Level ----------
+  // ---------- Level ----------
   const LEVEL = {
-    width: 2200,
+    width: 2600,
     height: 600,
     gravity: 1400,
     frictionGround: 0.86,
     frictionAir: 0.94,
-    player: { x: 80, y: 80 },
-    goal: { x: 2060, y: 312, w: 32, h: 64 },
-    platforms: [
-      // floor segments
-      { x: 0, y: 380, w: 700, h: 40 },
-      { x: 760, y: 420, w: 600, h: 40 },
-      { x: 1440, y: 380, w: 760, h: 40 },
+    player: { x: 80, y: 120 },
+    goal: { x: 2470, y: 220, w: 32, h: 64 },
 
-      // floating
-      { x: 220, y: 300, w: 160, h: 20 },
-      { x: 520, y: 260, w: 160, h: 20 },
-      { x: 880, y: 320, w: 140, h: 20 },
-      { x: 1120, y: 280, w: 160, h: 20 },
-      { x: 1560, y: 300, w: 180, h: 20 },
-      { x: 1820, y: 260, w: 160, h: 20 },
+    staticPlatforms: [
+      { x: 0,   y: 420, w: 520, h: 40 },
+      { x: 540, y: 420, w: 240, h: 40 },
+
+      { x: 820, y: 400, w: 180, h: 40 },
+      { x: 1030,y: 360, w: 180, h: 40 },
+      { x: 1240,y: 320, w: 200, h: 40 },
+
+      { x: 1500,y: 420, w: 360, h: 40 },
+
+      { x: 2060,y: 420, w: 540, h: 40 },
+
+      { x: 2140,y: 320, w: 140, h: 24 },
+      { x: 2320,y: 280, w: 160, h: 24 },
+      { x: 2460,y: 240, w: 120, h: 24 },
     ],
+
+    movingPlatforms: [
+      { x: 1660, y: 320, w: 120, h: 20, type: "h", minX: 1600, maxX: 1880, speed: 90, dir: 1, vx: 0, vy: 0 },
+      { x: 1880, y: 360, w: 96,  h: 20, type: "v", minY: 260, maxY: 380, speed: 70, dir: -1, vx: 0, vy: 0 },
+    ],
+
+    spikes: [
+      ...Array.from({ length: 34 }, (_, i) => ({ x: 1520 + i*16, y: 404, w: 16, h: 16 })),
+      { x: 1064, y: 344, w: 16, h: 16 },
+      { x: 1100, y: 344, w: 16, h: 16 },
+    ],
+
     coins: [
-      { x: 250, y: 260, taken: false },
-      { x: 300, y: 260, taken: false },
-      { x: 550, y: 220, taken: false },
-      { x: 600, y: 220, taken: false },
-      { x: 920, y: 280, taken: false },
-      { x: 1160, y: 240, taken: false },
-      { x: 1600, y: 260, taken: false },
-      { x: 1860, y: 220, taken: false },
-      { x: 1910, y: 220, taken: false },
+      { x: 210, y: 380, taken: false },
+      { x: 250, y: 380, taken: false },
+      { x: 290, y: 380, taken: false },
+
+      { x: 860, y: 360, taken: false },
+      { x: 900, y: 360, taken: false },
+      { x: 1090, y: 320, taken: false },
+      { x: 1290, y: 280, taken: false },
+      { x: 1330, y: 280, taken: false },
+
+      { x: 1700, y: 280, taken: false },
+      { x: 1740, y: 280, taken: false },
+      { x: 1780, y: 280, taken: false },
+      { x: 1920, y: 240, taken: false },
+
+      { x: 2360, y: 240, taken: false },
+      { x: 2400, y: 240, taken: false },
     ],
+
     enemies: [
-      { x: 420, y: 0, dir: 1, minX: 380, maxX: 620, alive: true },
-      { x: 1020, y: 0, dir: -1, minX: 880, maxX: 1240, alive: true },
-      { x: 1700, y: 0, dir: 1, minX: 1540, maxX: 1960, alive: true },
+      { x: 420, y: 0, dir: 1, minX: 220, maxX: 720, alive: true },
+      { x: 940, y: 0, dir: -1, minX: 820, maxX: 1180, alive: true },
+      { x: 2240, y: 0, dir: 1, minX: 2100, maxX: 2540, alive: true },
     ]
   };
 
@@ -224,37 +280,45 @@
     w: 18, h: 22,
     vx: 0, vy: 0,
     onGround: false,
+    groundRef: null,
+
     coyote: 0,
     coyoteMax: 0.10,
+
     face: 1,
     animT: 0,
+
     coins: 0,
     dead: false,
+
+    atkT: 0,
+    atkDur: 0.16,
+    atkCD: 0,
+    atkCDMax: 0.22,
   };
 
   const enemyProto = () => ({
     w: 18, h: 18,
-    vx: 70,
     vy: 0,
     onGround: false,
     animT: 0,
   });
-
   const enemies = LEVEL.enemies.map(e => Object.assign(enemyProto(), e));
 
-  // Camera
   const cam = { x: 0, y: 0 };
 
-  // ---------- Collision ----------
   function aabb(ax, ay, aw, ah, bx, by, bw, bh) {
     return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
   }
 
-  function resolveCollisions(ent, platforms) {
-    // Separate axis resolution
-    ent.onGround = false;
+  function getAllPlatforms() {
+    return [...LEVEL.staticPlatforms, ...LEVEL.movingPlatforms];
+  }
 
-    // X
+  function resolveCollisions(ent, platforms, dt) {
+    ent.onGround = false;
+    ent.groundRef = null;
+
     ent.x += ent.vx * dt;
     for (const p of platforms) {
       if (aabb(ent.x, ent.y, ent.w, ent.h, p.x, p.y, p.w, p.h)) {
@@ -264,7 +328,6 @@
       }
     }
 
-    // Y
     ent.y += ent.vy * dt;
     for (const p of platforms) {
       if (aabb(ent.x, ent.y, ent.w, ent.h, p.x, p.y, p.w, p.h)) {
@@ -272,6 +335,7 @@
           ent.y = p.y - ent.h;
           ent.vy = 0;
           ent.onGround = true;
+          ent.groundRef = p;
         } else if (ent.vy < 0) {
           ent.y = p.y + p.h;
           ent.vy = 0;
@@ -290,13 +354,17 @@
     player.y = LEVEL.player.y;
     player.vx = 0; player.vy = 0;
     player.onGround = false;
+    player.groundRef = null;
     player.coyote = 0;
     player.face = 1;
     player.animT = 0;
     player.dead = false;
     player.coins = 0;
+    player.atkT = 0;
+    player.atkCD = 0;
 
     for (const c of LEVEL.coins) c.taken = false;
+
     for (let i = 0; i < enemies.length; i++) {
       enemies[i].x = LEVEL.enemies[i].x;
       enemies[i].y = 0;
@@ -305,6 +373,12 @@
       enemies[i].vy = 0;
       enemies[i].onGround = false;
       enemies[i].animT = 0;
+    }
+
+    for (const p of LEVEL.movingPlatforms) {
+      p.vx = 0; p.vy = 0;
+      if (p.type === "h") p.dir = 1;
+      if (p.type === "v") p.dir = -1;
     }
 
     coinPill.textContent = "💠 0";
@@ -322,28 +396,10 @@
     last = performance.now();
     requestAnimationFrame(tick);
   }
-
   playBtn.addEventListener("click", startGame, { passive: true });
 
-  function killPlayer(msg) {
-    player.dead = true;
-    overlayMsg.textContent = msg || "You fell! Tap/Click to try again.";
-    overlayMsg.classList.remove("hidden");
-    running = false;
-
-    const restart = () => {
-      overlayMsg.removeEventListener("pointerdown", restart);
-      overlayMsg.classList.add("hidden");
-      resetLevel();
-      running = true;
-      last = performance.now();
-      requestAnimationFrame(tick);
-    };
-    overlayMsg.addEventListener("pointerdown", restart, { passive: true });
-  }
-
-  function winLevel() {
-    overlayMsg.textContent = `Level clear! 💠 ${player.coins}\nTap/Click to replay.`;
+  function stopWithOverlay(msg) {
+    overlayMsg.textContent = msg;
     overlayMsg.classList.remove("hidden");
     running = false;
 
@@ -368,20 +424,55 @@
     update(dt);
     render();
 
-    // reset one-frame edges
     input.jumpPressed = false;
+    input.atkPressed = false;
 
     requestAnimationFrame(tick);
   }
 
-  // ---------- Update ----------
-  function update(dtLocal) {
-    // buffer jump
-    if (input.jumpBuffer > 0) input.jumpBuffer = Math.max(0, input.jumpBuffer - dtLocal);
+  function updateMovingPlatforms(dt) {
+    for (const p of LEVEL.movingPlatforms) {
+      p.vx = 0; p.vy = 0;
 
-    // Horizontal movement
+      if (p.type === "h") {
+        p.vx = p.dir * p.speed;
+        p.x += p.vx * dt;
+        if (p.x < p.minX) { p.x = p.minX; p.dir = 1; }
+        if (p.x > p.maxX) { p.x = p.maxX; p.dir = -1; }
+      } else if (p.type === "v") {
+        p.vy = p.dir * p.speed;
+        p.y += p.vy * dt;
+        if (p.y < p.minY) { p.y = p.minY; p.dir = 1; }
+        if (p.y > p.maxY) { p.y = p.maxY; p.dir = -1; }
+      }
+    }
+  }
+
+  function killPlayer(reason) {
+    stopWithOverlay(reason || "You died! Tap/Click to retry.");
+  }
+
+  function winLevel() {
+    stopWithOverlay(`Level clear! 💠 ${player.coins}\nTap/Click to replay.`);
+  }
+
+  function update(dtLocal) {
+    if (input.jumpBuffer > 0) input.jumpBuffer = Math.max(0, input.jumpBuffer - dtLocal);
+    if (input.atkBuffer > 0) input.atkBuffer = Math.max(0, input.atkBuffer - dtLocal);
+
+    updateMovingPlatforms(dtLocal);
+
+    if (player.atkCD > 0) player.atkCD = Math.max(0, player.atkCD - dtLocal);
+    if (player.atkT > 0) player.atkT = Math.max(0, player.atkT - dtLocal);
+
+    if ((input.atkPressed || input.atkBuffer > 0) && player.atkCD <= 0) {
+      player.atkT = player.atkDur;
+      player.atkCD = player.atkCDMax;
+      input.atkBuffer = 0;
+    }
+
     const accel = player.onGround ? 1150 : 820;
-    const maxSpeed = 220;
+    const maxSpeed = player.atkT > 0 ? 200 : 220;
 
     if (input.left && !input.right) {
       player.vx -= accel * dtLocal;
@@ -390,18 +481,15 @@
       player.vx += accel * dtLocal;
       player.face = 1;
     } else {
-      // friction
       player.vx *= player.onGround ? LEVEL.frictionGround : LEVEL.frictionAir;
       if (Math.abs(player.vx) < 8) player.vx = 0;
     }
     player.vx = clamp(player.vx, -maxSpeed, maxSpeed);
 
-    // Gravity + coyote time
     player.vy += LEVEL.gravity * dtLocal;
     if (player.onGround) player.coyote = player.coyoteMax;
     else player.coyote = Math.max(0, player.coyote - dtLocal);
 
-    // Jump
     const wantJump = (input.jumpPressed || input.jumpBuffer > 0) && (player.onGround || player.coyote > 0);
     if (wantJump) {
       player.vy = -520;
@@ -409,21 +497,29 @@
       player.coyote = 0;
       input.jumpBuffer = 0;
     }
-    // Variable jump height
-    if (!input.jumpHeld && player.vy < -180) {
-      player.vy = -180;
+    if (!input.jumpHeld && player.vy < -180) player.vy = -180;
+
+    const platforms = getAllPlatforms();
+    resolveCollisions(player, platforms, dtLocal);
+
+    if (player.onGround && player.groundRef) {
+      const g = player.groundRef;
+      if (g.vx) player.x += g.vx * dtLocal;
+      if (g.vy) player.y += g.vy * dtLocal;
     }
 
-    // Move & collide
-    resolveCollisions(player, LEVEL.platforms);
-
-    // Fall death
-    if (player.y > LEVEL.height + 200) {
+    if (player.y > LEVEL.height + 220) {
       killPlayer("You fell off the world!\nTap/Click to retry.");
       return;
     }
 
-    // Coins
+    for (const s of LEVEL.spikes) {
+      if (aabb(player.x, player.y, player.w, player.h, s.x, s.y, s.w, s.h)) {
+        killPlayer("Spikes! Tap/Click to retry.");
+        return;
+      }
+    }
+
     for (const c of LEVEL.coins) {
       if (c.taken) continue;
       if (aabb(player.x, player.y, player.w, player.h, c.x, c.y, 12, 12)) {
@@ -433,25 +529,39 @@
       }
     }
 
-    // Enemies
     for (const e of enemies) {
       if (!e.alive) continue;
 
       e.vy += LEVEL.gravity * dtLocal;
-      e.vx = e.dir * 70;
+      const speed = 70;
+      const vx = e.dir * speed;
 
-      resolveCollisions(e, LEVEL.platforms);
+      e.x += vx * dtLocal;
+
+      const oldVX = e.vx;
+      e.vx = vx;
+      resolveCollisions(e, platforms, dtLocal);
+      e.vx = oldVX;
 
       if (e.x < e.minX) { e.x = e.minX; e.dir = 1; }
       if (e.x > e.maxX) { e.x = e.maxX; e.dir = -1; }
 
-      // player interaction
+      for (const s of LEVEL.spikes) {
+        if (aabb(e.x, e.y, e.w, e.h, s.x, s.y, s.w, s.h)) {
+          e.alive = false;
+          break;
+        }
+      }
+
+      if (!e.alive) continue;
       if (aabb(player.x, player.y, player.w, player.h, e.x, e.y, e.w, e.h)) {
         const playerFalling = player.vy > 120;
         const playerAbove = (player.y + player.h) - e.y < 10;
         if (playerFalling && playerAbove) {
           e.alive = false;
           player.vy = -330;
+        } else if (player.atkT > 0) {
+          e.alive = false;
         } else {
           killPlayer("Ouch! Enemy got you.\nTap/Click to retry.");
           return;
@@ -459,18 +569,30 @@
       }
     }
 
-    // Goal
+    if (player.atkT > 0) {
+      const reach = 26;
+      const hx = player.face > 0 ? (player.x + player.w) : (player.x - reach);
+      const hy = player.y + 4;
+      const hw = reach;
+      const hh = 14;
+
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        if (aabb(hx, hy, hw, hh, e.x, e.y, e.w, e.h)) {
+          e.alive = false;
+        }
+      }
+    }
+
     if (aabb(player.x, player.y, player.w, player.h, LEVEL.goal.x, LEVEL.goal.y, LEVEL.goal.w, LEVEL.goal.h)) {
       winLevel();
       return;
     }
 
-    // Camera follow
     const targetX = player.x + player.w/2 - viewW/2;
     cam.x = clamp(lerp(cam.x, targetX, 0.12), 0, LEVEL.width - viewW);
     cam.y = 0;
 
-    // Anim timers
     player.animT += dtLocal;
     for (const e of enemies) e.animT += dtLocal;
   }
@@ -479,40 +601,42 @@
   function drawTiledBackground() {
     const img = assets.bg;
     const tile = 32;
-    // scale background tile to tile size in world
     const startX = Math.floor(cam.x / tile) * tile;
-    const startY = 0;
-    for (let y = startY; y < viewH + tile; y += tile) {
+    for (let y = 0; y < viewH + tile; y += tile) {
       for (let x = startX; x < cam.x + viewW + tile; x += tile) {
         ctx.drawImage(img, 0, 0, 32, 32, Math.floor(x - cam.x), y, tile, tile);
       }
     }
   }
 
-  function drawPlatform(p) {
-    // Use platform sprite (48x32) and tile it across the platform width
+  function drawTile(img, src, dx, dy, dw=16, dh=16) {
+    ctx.drawImage(img, src.sx, src.sy, src.sw, src.sh, Math.floor(dx), Math.floor(dy), dw, dh);
+  }
+
+  function drawGround(p) {
     const img = assets.env;
+    const tile = 16;
+    const topTiles = [ENV.blockA, ENV.blockB, ENV.blockC, ENV.blockD];
 
-    // Top surface: draw platform sprite in 48px chunks
-    const chunkW = 48;
-    const chunkH = 32;
-    for (let x = 0; x < p.w; x += chunkW) {
-      const w = Math.min(chunkW, p.w - x);
-      ctx.drawImage(
-        img,
-        ENV.platform.sx, ENV.platform.sy, w, chunkH,
-        Math.floor(p.x + x - cam.x), Math.floor(p.y - cam.y - (chunkH - p.h)),
-        w, chunkH
-      );
+    for (let x = 0; x < p.w; x += tile) {
+      const t = topTiles[Math.floor((p.x + x) / 64) % topTiles.length];
+      drawTile(img, t, p.x + x - cam.x, p.y - cam.y, tile, tile);
+    }
+    for (let y = tile; y < p.h; y += tile) {
+      for (let x = 0; x < p.w; x += tile) {
+        drawTile(img, ENV.blockF, p.x + x - cam.x, p.y + y - cam.y, tile, tile);
+      }
     }
 
-    // Add a little rock detail sometimes
-    if (p.w >= 180) {
-      ctx.drawImage(img, ENV.rock1.sx, ENV.rock1.sy, ENV.rock1.sw, ENV.rock1.sh,
-        Math.floor(p.x + 12 - cam.x), Math.floor(p.y + 10 - cam.y),
-        ENV.rock1.sw, ENV.rock1.sh
-      );
-    }
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.fillRect(Math.floor(p.x - cam.x), Math.floor(p.y - cam.y + 1), Math.floor(p.w), 2);
+  }
+
+  function drawMovingPlatform(p) {
+    drawGround(p);
+    ctx.strokeStyle = "rgba(140, 200, 255, 0.35)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(Math.floor(p.x - cam.x) + 1, Math.floor(p.y - cam.y) + 1, Math.floor(p.w) - 2, Math.floor(p.h) - 2);
   }
 
   function drawSpriteFrame(img, frame, x, y, w, h, flipX) {
@@ -528,28 +652,35 @@
   }
 
   function render() {
-    // Clear
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, viewW, viewH);
 
-    // Background
     drawTiledBackground();
 
-    // Platforms
-    for (const p of LEVEL.platforms) drawPlatform(p);
+    ctx.fillStyle = "rgba(20, 50, 110, 0.08)";
+    for (let i = 0; i < 6; i++) {
+      const y = 24 + i * 26 + Math.sin((performance.now()/1000) * 0.6 + i) * 3;
+      ctx.fillRect(0, y, viewW, 8);
+    }
 
-    // Goal "gate"
+    for (const p of LEVEL.staticPlatforms) drawGround(p);
+    for (const p of LEVEL.movingPlatforms) drawMovingPlatform(p);
+
+    const env = assets.env;
+    for (const s of LEVEL.spikes) {
+      drawTile(env, ENV.spikeFull, s.x - cam.x, s.y - cam.y, 16, 16);
+    }
+
     const gx = Math.floor(LEVEL.goal.x - cam.x);
     const gy = Math.floor(LEVEL.goal.y - cam.y);
-    ctx.fillStyle = "rgba(210, 240, 255, 0.15)";
+    ctx.fillStyle = "rgba(210, 240, 255, 0.14)";
     ctx.fillRect(gx, gy, LEVEL.goal.w, LEVEL.goal.h);
     ctx.strokeStyle = "rgba(140, 200, 255, 0.85)";
     ctx.lineWidth = 2;
     ctx.strokeRect(gx + 1, gy + 1, LEVEL.goal.w - 2, LEVEL.goal.h - 2);
-    ctx.fillStyle = "rgba(140, 200, 255, 0.30)";
+    ctx.fillStyle = "rgba(140, 200, 255, 0.22)";
     ctx.fillRect(gx + 6, gy + 6, LEVEL.goal.w - 12, LEVEL.goal.h - 12);
 
-    // Coins
     const sheet = assets.sheet;
     for (const c of LEVEL.coins) {
       if (c.taken) continue;
@@ -559,7 +690,6 @@
       drawSpriteFrame(sheet, frame, c.x - cam.x, c.y - cam.y + bob, 14, 14, false);
     }
 
-    // Enemies
     for (const e of enemies) {
       if (!e.alive) continue;
       const t = e.animT;
@@ -567,14 +697,31 @@
       drawSpriteFrame(sheet, frame, e.x - cam.x, e.y - cam.y, 20, 20, e.dir < 0);
     }
 
-    // Player
     const pt = player.animT;
     const moving = Math.abs(player.vx) > 15;
-    const frames = SPRITES.playerIdle;
-    const frame = frames[Math.floor((pt * (moving ? 10 : 6)) % frames.length)];
-    drawSpriteFrame(sheet, frame, player.x - cam.x, player.y - cam.y, 22, 22, player.face < 0);
+    let pFrame = SPRITES.playerIdle[Math.floor((pt * (moving ? 10 : 6)) % SPRITES.playerIdle.length)];
+    if (player.atkT > 0) {
+      const idx = Math.floor(((player.atkDur - player.atkT) / player.atkDur) * SPRITES.playerAttack.length);
+      pFrame = SPRITES.playerAttack[clamp(idx, 0, SPRITES.playerAttack.length - 1)];
+    }
+    drawSpriteFrame(sheet, pFrame, player.x - cam.x, player.y - cam.y, 22, 22, player.face < 0);
 
-    // Simple vignette
+    if (player.atkT > 0) {
+      const prog = (player.atkDur - player.atkT) / player.atkDur;
+      const sx = player.face > 0 ? (player.x + 12) : (player.x - 14);
+      const sy = player.y + 4;
+
+      const fx = 0;
+      const fy = 48;
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      ctx.translate(Math.floor(sx - cam.x), Math.floor(sy - cam.y));
+      if (player.face < 0) ctx.scale(-1, 1);
+      ctx.rotate((-0.8 + prog * 1.6) * 0.35);
+      ctx.drawImage(sheet, fx, fy, SPR, SPR, 0, 0, 24, 24);
+      ctx.restore();
+    }
+
     const grd = ctx.createRadialGradient(viewW/2, viewH/2, 40, viewW/2, viewH/2, Math.max(viewW, viewH));
     grd.addColorStop(0, "rgba(0,0,0,0)");
     grd.addColorStop(1, "rgba(0,0,0,0.35)");
@@ -582,7 +729,6 @@
     ctx.fillRect(0,0,viewW,viewH);
   }
 
-  // ---------- Boot ----------
   async function boot() {
     resize();
     try {
@@ -595,5 +741,8 @@
     }
   }
 
-  boot();
+  (async function main() {
+    await boot();
+  })();
 })();
+
