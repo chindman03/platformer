@@ -1,8 +1,8 @@
-/* Neon Pocket Platformer (v2)
-   Improvements:
-   - Better-looking level flow (varied heights + pacing)
-   - Moving platforms + spike hazards (spikes never embedded in ground)
-   - Sword attack (keyboard + mobile button) with attack frame + hitbox
+/* Neon Pocket Platformer (v3) - Procedural
+   - Path-first / chunk-based procedural generation (always solvable-ish by construction)
+   - Verticality + jump pads for big climbs
+   - Sword attack + flying enemies
+   - Desktop: R regenerates the level
 */
 
 (() => {
@@ -11,6 +11,11 @@
   // ---------- Helpers ----------
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
+
+  function makeRng(seed) {
+    let s = (seed >>> 0) || 1;
+    return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  }
 
   function isTouchDevice() {
     return (
@@ -23,7 +28,7 @@
   // Prevent iOS Safari bounce/scroll
   document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
 
-  // ---------- Canvas setup ----------
+  // ---------- Canvas ----------
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d", { alpha: false });
   ctx.imageSmoothingEnabled = false;
@@ -71,6 +76,7 @@
   const hintText = document.getElementById("hintText");
   const hud = document.getElementById("hud");
   const coinPill = document.getElementById("coinPill");
+  const statusPill = document.getElementById("statusPill");
   const overlayMsg = document.getElementById("overlayMsg");
 
   const mobileControls = document.getElementById("mobileControls");
@@ -81,23 +87,18 @@
 
   const touchMode = isTouchDevice();
   hintText.textContent = touchMode
-    ? "Touch: ◀ ▶ move, ⚔ attack, ⤒ jump. Stomp or slash enemies. Avoid spikes. Reach the neon gate."
-    : "Keyboard: A/D or ←/→ move • W/Space/↑ jump • J / K / X attack. Stomp or slash enemies. Avoid spikes. Reach the neon gate.";
+    ? "Touch: ◀ ▶ move, ⚔ attack, ⤒ jump. Jump pads boost you. Flying enemies need slashing. Reach the neon gate."
+    : "Keyboard: A/D or ←/→ move • W/Space/↑ jump • J/K/X/Z attack • R regenerate. Jump pads boost you. Flying enemies need slashing.";
 
   // ---------- Input ----------
   const input = {
     left: false,
     right: false,
-
-    jumpPressed: false,   // edge
+    jumpPressed: false,
     jumpHeld: false,
-    jumpBuffer: 0,
-    jumpBufferMax: 0.12,
-
-    atkPressed: false,    // edge
+    atkPressed: false,
     atkHeld: false,
-    atkBuffer: 0,
-    atkBufferMax: 0.10,
+    regenPressed: false,
   };
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -109,69 +110,49 @@
     const bindHold = (el, key) => {
       const down = (e) => { e.preventDefault(); input[key] = true; };
       const up = (e) => { e.preventDefault(); input[key] = false; };
-
       el.addEventListener("pointerdown", down, { passive: false });
       el.addEventListener("pointerup", up, { passive: false });
       el.addEventListener("pointercancel", up, { passive: false });
-      el.addEventListener("pointerout", (e) => {
-        if (e.pointerType !== "mouse") up(e);
-      }, { passive: false });
+      el.addEventListener("pointerout", (e) => { if (e.pointerType !== "mouse") up(e); }, { passive: false });
     };
-
     bindHold(btnLeft, "left");
     bindHold(btnRight, "right");
 
-    const downJump = (e) => {
+    btnJump.addEventListener("pointerdown", (e) => {
       e.preventDefault();
+      if (!input.jumpHeld) input.jumpPressed = true;
       input.jumpHeld = true;
-      input.jumpPressed = true;
-      input.jumpBuffer = input.jumpBufferMax;
-    };
-    const upJump = (e) => { e.preventDefault(); input.jumpHeld = false; };
+    }, { passive: false });
+    btnJump.addEventListener("pointerup", (e) => { e.preventDefault(); input.jumpHeld = false; }, { passive: false });
+    btnJump.addEventListener("pointercancel", (e) => { e.preventDefault(); input.jumpHeld = false; }, { passive: false });
 
-    btnJump.addEventListener("pointerdown", downJump, { passive: false });
-    btnJump.addEventListener("pointerup", upJump, { passive: false });
-    btnJump.addEventListener("pointercancel", upJump, { passive: false });
-
-    const downAtk = (e) => {
+    btnAttack.addEventListener("pointerdown", (e) => {
       e.preventDefault();
-      if (!input.atkHeld) {
-        input.atkPressed = true;
-        input.atkBuffer = input.atkBufferMax;
-      }
+      if (!input.atkHeld) input.atkPressed = true;
       input.atkHeld = true;
-    };
-    const upAtk = (e) => { e.preventDefault(); input.atkHeld = false; };
-
-    btnAttack.addEventListener("pointerdown", downAtk, { passive: false });
-    btnAttack.addEventListener("pointerup", upAtk, { passive: false });
-    btnAttack.addEventListener("pointercancel", upAtk, { passive: false });
+    }, { passive: false });
+    btnAttack.addEventListener("pointerup", (e) => { e.preventDefault(); input.atkHeld = false; }, { passive: false });
+    btnAttack.addEventListener("pointercancel", (e) => { e.preventDefault(); input.atkHeld = false; }, { passive: false });
   }
 
   function setupKeyboard() {
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
-
       if (["arrowleft","a"].includes(k)) input.left = true;
       if (["arrowright","d"].includes(k)) input.right = true;
 
       if (["arrowup","w"," "].includes(k)) {
-        if (!input.jumpHeld) {
-          input.jumpPressed = true;
-          input.jumpBuffer = input.jumpBufferMax;
-        }
+        if (!input.jumpHeld) input.jumpPressed = true;
         input.jumpHeld = true;
       }
 
       if (["j","k","x","z"].includes(k)) {
-        if (!input.atkHeld) {
-          input.atkPressed = true;
-          input.atkBuffer = input.atkBufferMax;
-        }
+        if (!input.atkHeld) input.atkPressed = true;
         input.atkHeld = true;
       }
 
-      if (["arrowleft","arrowright","arrowup"," ","j","k","x","z"].includes(k)) e.preventDefault();
+      if (k === "r") input.regenPressed = true;
+      if (["arrowleft","arrowright","arrowup"," ","j","k","x","z","r"].includes(k)) e.preventDefault();
     }, { passive: false });
 
     window.addEventListener("keyup", (e) => {
@@ -185,21 +166,14 @@
 
   // ---------- Sprites ----------
   const SPR = 16;
-
   const SPRITES = {
-    playerIdle: [
-      { x: 16, y: 0 }, { x: 32, y: 0 }, { x: 48, y: 0 }, { x: 64, y: 0 }
-    ],
-    playerAttack: [
-      { x: 0, y: 16 }, { x: 16, y: 16 }
-    ],
-    enemyIdle: [
-      { x: 160, y: 0 }, { x: 176, y: 0 }, { x: 192, y: 0 }, { x: 208, y: 0 }, { x: 224, y: 0 }
-    ],
+    playerIdle: [{ x: 16, y: 0 }, { x: 32, y: 0 }, { x: 48, y: 0 }, { x: 64, y: 0 }],
+    playerAttack: [{ x: 0, y: 16 }, { x: 16, y: 16 }],
+    enemyGround: [{ x: 160, y: 0 }, { x: 176, y: 0 }, { x: 192, y: 0 }, { x: 208, y: 0 }, { x: 224, y: 0 }],
+    enemyFly: [{ x: 80, y: 0 }, { x: 96, y: 0 }, { x: 112, y: 0 }, { x: 128, y: 0 }],
     coin: [{ x: 0, y: 32 }, { x: 16, y: 32 }, { x: 32, y: 32 }, { x: 48, y: 32 }, { x: 64, y: 32 }],
   };
 
-  // Environment sheet (64x64)
   const ENV = {
     blockA: { sx: 0, sy: 0, sw: 16, sh: 16 },
     blockB: { sx: 16, sy: 0, sw: 16, sh: 16 },
@@ -209,111 +183,305 @@
     spikeFull: { sx: 0, sy: 32, sw: 16, sh: 16 },
   };
 
-  // ---------- Level ----------
-  const LEVEL = {
-    width: 2600,
-    height: 600,
-    gravity: 1400,
-    frictionGround: 0.86,
-    frictionAir: 0.94,
-    player: { x: 80, y: 120 },
-    goal: { x: 2470, y: 220, w: 32, h: 64 },
-
-    staticPlatforms: [
-      { x: 0,   y: 420, w: 520, h: 40 },
-      { x: 540, y: 420, w: 240, h: 40 },
-
-      { x: 820, y: 400, w: 180, h: 40 },
-      { x: 1030,y: 360, w: 180, h: 40 },
-      { x: 1240,y: 320, w: 200, h: 40 },
-
-      { x: 1500,y: 420, w: 360, h: 40 },
-
-      { x: 2060,y: 420, w: 540, h: 40 },
-
-      { x: 2140,y: 320, w: 140, h: 24 },
-      { x: 2320,y: 280, w: 160, h: 24 },
-      { x: 2460,y: 240, w: 120, h: 24 },
-    ],
-
-    movingPlatforms: [
-      { x: 1660, y: 320, w: 120, h: 20, type: "h", minX: 1600, maxX: 1880, speed: 90, dir: 1, vx: 0, vy: 0 },
-      { x: 1880, y: 360, w: 96,  h: 20, type: "v", minY: 260, maxY: 380, speed: 70, dir: -1, vx: 0, vy: 0 },
-    ],
-
-    spikes: [
-      ...Array.from({ length: 34 }, (_, i) => ({ x: 1520 + i*16, y: 404, w: 16, h: 16 })),
-      { x: 1064, y: 344, w: 16, h: 16 },
-      { x: 1100, y: 344, w: 16, h: 16 },
-    ],
-
-    coins: [
-      { x: 210, y: 380, taken: false },
-      { x: 250, y: 380, taken: false },
-      { x: 290, y: 380, taken: false },
-
-      { x: 860, y: 360, taken: false },
-      { x: 900, y: 360, taken: false },
-      { x: 1090, y: 320, taken: false },
-      { x: 1290, y: 280, taken: false },
-      { x: 1330, y: 280, taken: false },
-
-      { x: 1700, y: 280, taken: false },
-      { x: 1740, y: 280, taken: false },
-      { x: 1780, y: 280, taken: false },
-      { x: 1920, y: 240, taken: false },
-
-      { x: 2360, y: 240, taken: false },
-      { x: 2400, y: 240, taken: false },
-    ],
-
-    enemies: [
-      { x: 420, y: 0, dir: 1, minX: 220, maxX: 720, alive: true },
-      { x: 940, y: 0, dir: -1, minX: 820, maxX: 1180, alive: true },
-      { x: 2240, y: 0, dir: 1, minX: 2100, maxX: 2540, alive: true },
-    ]
+  // ---------- Capability constraints ----------
+  const CAP = {
+    tile: 16,
+    maxGap: 136,        // safe horizontal gap
+    maxStepUp: 64,      // safe vertical step-up
+    maxStepDown: 96,    // safe drop
+    padBoostVy: -860,   // jump pad vertical speed
   };
 
-  // ---------- Entities ----------
+  // ---------- Level state ----------
+  let level = null;
+
+  function generateLevel(seed) {
+    const rng = makeRng(seed);
+    const snap = (v) => Math.round(v / CAP.tile) * CAP.tile;
+
+    const staticPlatforms = [];
+    const movingPlatforms = [];
+    const spikes = [];
+    const pads = [];
+    const coins = [];
+    const enemies = [];
+
+    const minY = 176;
+    const maxY = 464;
+
+    const addPlatform = (x, y, w, h=40) => {
+      x = snap(x); y = snap(y); w = snap(w);
+      w = Math.max(w, CAP.tile * 4);
+      staticPlatforms.push({ x, y, w, h });
+      return staticPlatforms[staticPlatforms.length - 1];
+    };
+
+    const addMovingPlatform = (x, y, w, h, type, opts) => {
+      x = snap(x); y = snap(y); w = snap(w);
+      const p = Object.assign({ x, y, w, h, type, vx: 0, vy: 0 }, opts);
+      movingPlatforms.push(p);
+      return p;
+    };
+
+    const addSpikeRow = (x, y, tiles) => {
+      for (let i = 0; i < tiles; i++) {
+        spikes.push({ x: snap(x + i*CAP.tile), y: snap(y), w: 16, h: 16 });
+      }
+    };
+
+    const addPad = (x, y) => pads.push({ x: snap(x), y: snap(y), w: 16, h: 10 });
+
+    const addCoinLine = (x, y, count, spacing=22) => {
+      for (let i = 0; i < count; i++) coins.push({ x: x + i*spacing, y, taken: false });
+    };
+
+    const placeGroundEnemy = (p) => {
+      if (p.w < 140) return;
+      const ex = p.x + 40 + rng() * Math.max(10, p.w - 80);
+      enemies.push({
+        kind: "ground",
+        x: ex, y: 0,
+        dir: rng() < 0.5 ? -1 : 1,
+        minX: p.x + 10,
+        maxX: p.x + p.w - 30,
+        alive: true,
+        w: 18, h: 18,
+        vy: 0, onGround: false,
+        animT: rng() * 10,
+      });
+    };
+
+    const placeFlyEnemy = (nearX, nearY) => {
+      const span = 160 + rng()*120;
+      const x0 = nearX + 40 + rng()*140;
+      const y0 = clamp(nearY - (60 + rng()*80), minY, maxY - 160);
+      enemies.push({
+        kind: "fly",
+        x: x0, y: y0,
+        baseX: x0,
+        baseY: y0,
+        span,
+        phase: rng()*Math.PI*2,
+        dir: rng() < 0.5 ? -1 : 1,
+        alive: true,
+        w: 18, h: 18,
+        animT: rng()*10,
+      });
+    };
+
+    // --- Path-first spine ---
+    const startY = 420;
+    const start = addPlatform(0, startY, 560, 40);
+    addCoinLine(180, startY - 44, 3);
+    if (rng() < 0.25) placeFlyEnemy(start.x, start.y);
+
+    let cursorX = start.x + start.w;
+    let cursorY = startY;
+
+    const CHUNK_W = 320;
+    const chunkCount = 9 + Math.floor(rng() * 3); // 9–11
+
+    const pickChunkType = (i) => {
+      if (i % 4 === 3) return "rest";
+      const r = rng();
+      if (r < 0.18) return "towerPad";
+      if (r < 0.38) return "spikePitMove";
+      if (r < 0.58) return "stairUp";
+      if (r < 0.78) return "gapRun";
+      return "stairDown";
+    };
+
+    for (let i = 0; i < chunkCount; i++) {
+      const type = pickChunkType(i);
+      const baseX = cursorX;
+
+      // entry landing
+      const landing = addPlatform(baseX, cursorY, 120, 40);
+      if (rng() < 0.18) addCoinLine(landing.x + 30, landing.y - 44, 2);
+      if (rng() < 0.18) placeFlyEnemy(landing.x, landing.y);
+
+      if (type === "rest") {
+        const p = addPlatform(baseX, cursorY, CHUNK_W - 20, 40);
+        addCoinLine(p.x + 120, p.y - 44, 4);
+        if (rng() < 0.35) placeGroundEnemy(p);
+        cursorX = p.x + p.w;
+      }
+
+      if (type === "stairUp") {
+        let x = baseX;
+        let y = cursorY;
+        const steps = 4 + Math.floor(rng()*2);
+        for (let s = 0; s < steps; s++) {
+          const dy = -CAP.tile * (1 + (rng() < 0.3 ? 1 : 0));
+          y = clamp(snap(y + clamp(dy, -CAP.maxStepUp, CAP.maxStepDown)), minY, maxY);
+          const w = 112 + Math.floor(rng()*2)*32;
+          const p = addPlatform(x, y, w, 40);
+          if (rng() < 0.25) addCoinLine(p.x + 18, p.y - 44, 2);
+          if (rng() < 0.22) placeGroundEnemy(p);
+          if (rng() < 0.20) placeFlyEnemy(p.x, p.y);
+          const gap = Math.min(72 + rng()*64, CAP.maxGap);
+          x = p.x + p.w + gap;
+        }
+        cursorY = y; cursorX = x;
+      }
+
+      if (type === "stairDown") {
+        let x = baseX;
+        let y = cursorY;
+        const drops = 3 + Math.floor(rng()*3);
+        for (let s = 0; s < drops; s++) {
+          const dy = CAP.tile * (1 + (rng() < 0.35 ? 1 : 0));
+          y = clamp(snap(y + clamp(dy, -CAP.maxStepUp, CAP.maxStepDown)), minY, maxY);
+          const w = 128 + Math.floor(rng()*2)*32;
+          const p = addPlatform(x, y, w, 40);
+          if (rng() < 0.20) addCoinLine(p.x + 26, p.y - 44, 2);
+          if (rng() < 0.18) placeGroundEnemy(p);
+          if (rng() < 0.18) placeFlyEnemy(p.x, p.y);
+          const gap = Math.min(72 + rng()*64, CAP.maxGap);
+          x = p.x + p.w + gap;
+        }
+        cursorY = y; cursorX = x;
+      }
+
+      if (type === "gapRun") {
+        let x = baseX;
+        let y = cursorY;
+        const hops = 5 + Math.floor(rng()*2);
+        for (let h = 0; h < hops; h++) {
+          const dy = (rng() < 0.5 ? -1 : 1) * CAP.tile * (rng() < 0.6 ? 1 : 2);
+          y = clamp(snap(y + clamp(dy, -CAP.maxStepUp, CAP.maxStepDown)), minY, maxY);
+          const w = 80 + Math.floor(rng()*3)*16;
+          const p = addPlatform(x, y, w, 40);
+
+          // spikes only ON TOP (never inside ground)
+          if (rng() < 0.12) addSpikeRow(p.x + p.w - 32, p.y - 16, 2);
+
+          if (rng() < 0.28) addCoinLine(p.x + 18, p.y - 44, 2);
+          if (rng() < 0.22) placeFlyEnemy(p.x, p.y);
+
+          const gap = Math.min(80 + rng()*56, CAP.maxGap);
+          x = p.x + p.w + gap;
+        }
+        cursorY = y; cursorX = x;
+      }
+
+      if (type === "spikePitMove") {
+        const pitW = 320 + Math.floor(rng()*3)*64;
+        const pitX = baseX;
+        const floorY = clamp(snap(cursorY), minY, maxY);
+
+        const approach = addPlatform(pitX, floorY, 180, 40);
+        if (rng() < 0.25) placeGroundEnemy(approach);
+
+        // spikes placed clearly BELOW the walk line
+        const spikeY = floorY + 56;
+        addSpikeRow(pitX + 180, spikeY, Math.floor((pitW - 220)/16));
+
+        addMovingPlatform(pitX + 220, floorY - 96, 120, 20, "h", {
+          minX: pitX + 220,
+          maxX: pitX + pitW - 240,
+          speed: 100 + rng()*40,
+          dir: rng() < 0.5 ? -1 : 1
+        });
+
+        if (rng() < 0.55) {
+          addMovingPlatform(pitX + pitW - 240, floorY - 140, 96, 20, "v", {
+            minY: floorY - 180,
+            maxY: floorY - 60,
+            speed: 70 + rng()*25,
+            dir: -1
+          });
+        }
+
+        const exit = addPlatform(pitX + pitW - 40, floorY - 32, 240, 40);
+        if (rng() < 0.35) placeFlyEnemy(exit.x, exit.y);
+
+        cursorY = exit.y; cursorX = exit.x + exit.w;
+      }
+
+      if (type === "towerPad") {
+        const base = addPlatform(baseX, cursorY, 240, 40);
+        addPad(base.x + base.w/2, base.y - 10);
+
+        const highY = clamp(snap(cursorY - (CAP.tile * (7 + Math.floor(rng()*4)))), minY, maxY);
+        const high = addPlatform(base.x + 180, highY, 240, 40);
+
+        const midY = snap((base.y + high.y) / 2);
+        addPlatform(base.x + 110, midY, 160, 40);
+
+        addCoinLine(high.x + 40, high.y - 44, 5);
+        if (rng() < 0.35) placeFlyEnemy(high.x, high.y);
+        if (rng() < 0.25) placeGroundEnemy(high);
+
+        const exit = addPlatform(high.x + high.w + 64, clamp(snap(high.y + (rng() < 0.5 ? 32 : 0)), minY, maxY), 220, 40);
+        cursorY = exit.y; cursorX = exit.x + exit.w;
+      }
+
+      // chunk filler
+      if (cursorX - baseX < CHUNK_W - 60) {
+        const extraW = (CHUNK_W - (cursorX - baseX)) - 20;
+        const extra = addPlatform(cursorX, cursorY, extraW, 40);
+        if (rng() < 0.20) addCoinLine(extra.x + 34, extra.y - 44, 2);
+        if (rng() < 0.16) placeGroundEnemy(extra);
+        cursorX = extra.x + extra.w;
+      }
+    }
+
+    // Finish + goal
+    const endRun = addPlatform(cursorX, cursorY, 460, 40);
+    addCoinLine(endRun.x + 140, endRun.y - 44, 4);
+
+    const ledge1 = addPlatform(endRun.x + endRun.w - 260, clamp(endRun.y - 80, minY, maxY), 160, 40);
+    const ledge2 = addPlatform(endRun.x + endRun.w - 120, clamp(endRun.y - 128, minY, maxY), 160, 40);
+    addCoinLine(ledge2.x + 30, ledge2.y - 44, 3);
+
+    const goal = { x: endRun.x + endRun.w - 70, y: ledge2.y - 64, w: 32, h: 64 };
+    const width = goal.x + 260;
+
+    return {
+      seed,
+      width,
+      height: 600,
+      gravity: 1400,
+      frictionGround: 0.86,
+      frictionAir: 0.94,
+      playerStart: { x: 80, y: 260 },
+      goal,
+      staticPlatforms,
+      movingPlatforms,
+      spikes,
+      pads,
+      coins,
+      enemies,
+    };
+  }
+
+  // ---------- Player ----------
   const player = {
-    x: LEVEL.player.x, y: LEVEL.player.y,
+    x: 0, y: 0,
     w: 18, h: 22,
     vx: 0, vy: 0,
     onGround: false,
     groundRef: null,
-
     coyote: 0,
     coyoteMax: 0.10,
-
     face: 1,
     animT: 0,
-
     coins: 0,
-    dead: false,
-
     atkT: 0,
     atkDur: 0.16,
     atkCD: 0,
     atkCDMax: 0.22,
+    padLock: 0,
   };
-
-  const enemyProto = () => ({
-    w: 18, h: 18,
-    vy: 0,
-    onGround: false,
-    animT: 0,
-  });
-  const enemies = LEVEL.enemies.map(e => Object.assign(enemyProto(), e));
 
   const cam = { x: 0, y: 0 };
 
-  function aabb(ax, ay, aw, ah, bx, by, bw, bh) {
-    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
-  }
+  // ---------- Collision ----------
+  const aabb = (ax, ay, aw, ah, bx, by, bw, bh) =>
+    ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 
-  function getAllPlatforms() {
-    return [...LEVEL.staticPlatforms, ...LEVEL.movingPlatforms];
-  }
+  const getAllPlatforms = () => [...level.staticPlatforms, ...level.movingPlatforms];
 
   function resolveCollisions(ent, platforms, dt) {
     ent.onGround = false;
@@ -344,69 +512,51 @@
     }
   }
 
-  // ---------- Game loop ----------
+  // ---------- Loop ----------
   let running = false;
   let last = 0;
-  let dt = 0;
 
-  function resetLevel() {
-    player.x = LEVEL.player.x;
-    player.y = LEVEL.player.y;
+  function applyLevel(lv) {
+    level = lv;
+    statusPill.textContent = `Seed ${String(level.seed).slice(0, 6)}`;
+    resetState();
+  }
+
+  function resetState() {
+    player.x = level.playerStart.x;
+    player.y = level.playerStart.y;
     player.vx = 0; player.vy = 0;
     player.onGround = false;
     player.groundRef = null;
     player.coyote = 0;
     player.face = 1;
     player.animT = 0;
-    player.dead = false;
     player.coins = 0;
     player.atkT = 0;
     player.atkCD = 0;
+    player.padLock = 0;
 
-    for (const c of LEVEL.coins) c.taken = false;
-
-    for (let i = 0; i < enemies.length; i++) {
-      enemies[i].x = LEVEL.enemies[i].x;
-      enemies[i].y = 0;
-      enemies[i].dir = LEVEL.enemies[i].dir;
-      enemies[i].alive = true;
-      enemies[i].vy = 0;
-      enemies[i].onGround = false;
-      enemies[i].animT = 0;
-    }
-
-    for (const p of LEVEL.movingPlatforms) {
-      p.vx = 0; p.vy = 0;
-      if (p.type === "h") p.dir = 1;
-      if (p.type === "v") p.dir = -1;
-    }
+    for (const c of level.coins) c.taken = false;
+    for (const e of level.enemies) e.alive = true;
 
     coinPill.textContent = "💠 0";
     overlayMsg.classList.add("hidden");
   }
 
-  function startGame() {
-    titleScreen.classList.add("hidden");
-    hud.classList.remove("hidden");
-    if (touchMode) setupMobileControls();
-    else setupKeyboard();
-
-    resetLevel();
-    running = true;
-    last = performance.now();
-    requestAnimationFrame(tick);
+  function regenLevel() {
+    const seed = ((Date.now() + Math.random()*1e9) >>> 0);
+    applyLevel(generateLevel(seed));
   }
-  playBtn.addEventListener("click", startGame, { passive: true });
 
-  function stopWithOverlay(msg) {
-    overlayMsg.textContent = msg;
+  function stopOverlay(msg) {
+    overlayMsg.textContent = msg + (touchMode ? "\nTap to replay." : "\nClick to replay. (R regenerates)");
     overlayMsg.classList.remove("hidden");
     running = false;
 
     const restart = () => {
       overlayMsg.removeEventListener("pointerdown", restart);
       overlayMsg.classList.add("hidden");
-      resetLevel();
+      resetState();
       running = true;
       last = performance.now();
       requestAnimationFrame(tick);
@@ -414,26 +564,25 @@
     overlayMsg.addEventListener("pointerdown", restart, { passive: true });
   }
 
-  function tick(now) {
-    if (!running) return;
+  function startGame() {
+    titleScreen.classList.add("hidden");
+    hud.classList.remove("hidden");
 
-    dt = (now - last) / 1000;
-    last = now;
-    dt = clamp(dt, 0, 1/20);
+    if (touchMode) setupMobileControls();
+    else setupKeyboard();
 
-    update(dt);
-    render();
+    const seed = (Date.now() ^ (Math.random() * 1e9)) >>> 0;
+    applyLevel(generateLevel(seed));
 
-    input.jumpPressed = false;
-    input.atkPressed = false;
-
+    running = true;
+    last = performance.now();
     requestAnimationFrame(tick);
   }
+  playBtn.addEventListener("click", startGame, { passive: true });
 
   function updateMovingPlatforms(dt) {
-    for (const p of LEVEL.movingPlatforms) {
+    for (const p of level.movingPlatforms) {
       p.vx = 0; p.vy = 0;
-
       if (p.type === "h") {
         p.vx = p.dir * p.speed;
         p.x += p.vx * dt;
@@ -448,153 +597,181 @@
     }
   }
 
-  function killPlayer(reason) {
-    stopWithOverlay(reason || "You died! Tap/Click to retry.");
+  function tick(now) {
+    if (!running) return;
+
+    let dt = (now - last) / 1000;
+    last = now;
+    dt = clamp(dt, 0, 1/20);
+
+    update(dt);
+    render();
+
+    input.jumpPressed = false;
+    input.atkPressed = false;
+    input.regenPressed = false;
+
+    requestAnimationFrame(tick);
   }
 
-  function winLevel() {
-    stopWithOverlay(`Level clear! 💠 ${player.coins}\nTap/Click to replay.`);
-  }
+  function update(dt) {
+    if (!level) return;
 
-  function update(dtLocal) {
-    if (input.jumpBuffer > 0) input.jumpBuffer = Math.max(0, input.jumpBuffer - dtLocal);
-    if (input.atkBuffer > 0) input.atkBuffer = Math.max(0, input.atkBuffer - dtLocal);
+    if (input.regenPressed) regenLevel();
 
-    updateMovingPlatforms(dtLocal);
+    if (player.padLock > 0) player.padLock = Math.max(0, player.padLock - dt);
 
-    if (player.atkCD > 0) player.atkCD = Math.max(0, player.atkCD - dtLocal);
-    if (player.atkT > 0) player.atkT = Math.max(0, player.atkT - dtLocal);
+    updateMovingPlatforms(dt);
 
-    if ((input.atkPressed || input.atkBuffer > 0) && player.atkCD <= 0) {
+    // sword timers
+    if (player.atkCD > 0) player.atkCD = Math.max(0, player.atkCD - dt);
+    if (player.atkT > 0) player.atkT = Math.max(0, player.atkT - dt);
+
+    if (input.atkPressed && player.atkCD <= 0) {
       player.atkT = player.atkDur;
       player.atkCD = player.atkCDMax;
-      input.atkBuffer = 0;
     }
 
+    // movement
     const accel = player.onGround ? 1150 : 820;
     const maxSpeed = player.atkT > 0 ? 200 : 220;
 
-    if (input.left && !input.right) {
-      player.vx -= accel * dtLocal;
-      player.face = -1;
-    } else if (input.right && !input.left) {
-      player.vx += accel * dtLocal;
-      player.face = 1;
-    } else {
-      player.vx *= player.onGround ? LEVEL.frictionGround : LEVEL.frictionAir;
+    if (input.left && !input.right) { player.vx -= accel * dt; player.face = -1; }
+    else if (input.right && !input.left) { player.vx += accel * dt; player.face = 1; }
+    else {
+      player.vx *= player.onGround ? level.frictionGround : level.frictionAir;
       if (Math.abs(player.vx) < 8) player.vx = 0;
     }
     player.vx = clamp(player.vx, -maxSpeed, maxSpeed);
 
-    player.vy += LEVEL.gravity * dtLocal;
+    // gravity + coyote
+    player.vy += level.gravity * dt;
     if (player.onGround) player.coyote = player.coyoteMax;
-    else player.coyote = Math.max(0, player.coyote - dtLocal);
+    else player.coyote = Math.max(0, player.coyote - dt);
 
-    const wantJump = (input.jumpPressed || input.jumpBuffer > 0) && (player.onGround || player.coyote > 0);
+    // jump
+    const wantJump = input.jumpPressed && (player.onGround || player.coyote > 0);
     if (wantJump) {
       player.vy = -520;
       player.onGround = false;
       player.coyote = 0;
-      input.jumpBuffer = 0;
     }
     if (!input.jumpHeld && player.vy < -180) player.vy = -180;
 
     const platforms = getAllPlatforms();
-    resolveCollisions(player, platforms, dtLocal);
+    resolveCollisions(player, platforms, dt);
 
+    // carry platforms
     if (player.onGround && player.groundRef) {
       const g = player.groundRef;
-      if (g.vx) player.x += g.vx * dtLocal;
-      if (g.vy) player.y += g.vy * dtLocal;
+      if (g.vx) player.x += g.vx * dt;
+      if (g.vy) player.y += g.vy * dt;
     }
 
-    if (player.y > LEVEL.height + 220) {
-      killPlayer("You fell off the world!\nTap/Click to retry.");
-      return;
-    }
-
-    for (const s of LEVEL.spikes) {
-      if (aabb(player.x, player.y, player.w, player.h, s.x, s.y, s.w, s.h)) {
-        killPlayer("Spikes! Tap/Click to retry.");
-        return;
+    // pads
+    if (player.padLock <= 0 && player.onGround) {
+      const footX = player.x + player.w/2;
+      const footY = player.y + player.h;
+      for (const pad of level.pads) {
+        if (
+          footX > pad.x - 10 && footX < pad.x + pad.w + 10 &&
+          Math.abs(footY - (pad.y + pad.h)) < 8
+        ) {
+          player.vy = CAP.padBoostVy;
+          player.onGround = false;
+          player.coyote = 0;
+          player.padLock = 0.25;
+          break;
+        }
       }
     }
 
-    for (const c of LEVEL.coins) {
+    // fall death
+    if (player.y > level.height + 220) { stopOverlay("You fell off the world!"); return; }
+
+    // spikes
+    for (const s of level.spikes) {
+      if (aabb(player.x, player.y, player.w, player.h, s.x, s.y, s.w, s.h)) {
+        stopOverlay("Spikes!"); return;
+      }
+    }
+
+    // coins
+    for (const c of level.coins) {
       if (c.taken) continue;
       if (aabb(player.x, player.y, player.w, player.h, c.x, c.y, 12, 12)) {
         c.taken = true;
-        player.coins += 1;
+        player.coins++;
         coinPill.textContent = `💠 ${player.coins}`;
       }
     }
 
-    for (const e of enemies) {
+    // enemies
+    for (const e of level.enemies) {
       if (!e.alive) continue;
 
-      e.vy += LEVEL.gravity * dtLocal;
-      const speed = 70;
-      const vx = e.dir * speed;
+      if (e.kind === "ground") {
+        e.vy += level.gravity * dt;
+        const speed = 70;
+        const vx = e.dir * speed;
+        e.x += vx * dt;
 
-      e.x += vx * dtLocal;
+        const tmpVX = e.vx;
+        e.vx = vx;
+        resolveCollisions(e, platforms, dt);
+        e.vx = tmpVX;
 
-      const oldVX = e.vx;
-      e.vx = vx;
-      resolveCollisions(e, platforms, dtLocal);
-      e.vx = oldVX;
+        if (e.x < e.minX) { e.x = e.minX; e.dir = 1; }
+        if (e.x > e.maxX) { e.x = e.maxX; e.dir = -1; }
 
-      if (e.x < e.minX) { e.x = e.minX; e.dir = 1; }
-      if (e.x > e.maxX) { e.x = e.maxX; e.dir = -1; }
-
-      for (const s of LEVEL.spikes) {
-        if (aabb(e.x, e.y, e.w, e.h, s.x, s.y, s.w, s.h)) {
-          e.alive = false;
-          break;
-        }
+        e.animT += dt;
+      } else {
+        e.animT += dt;
+        const t = (performance.now()/1000) + e.phase;
+        e.x = e.baseX + Math.sin(t * 0.6) * (e.span/2);
+        e.y = e.baseY + Math.sin(t * 2.2) * 8;
       }
 
-      if (!e.alive) continue;
       if (aabb(player.x, player.y, player.w, player.h, e.x, e.y, e.w, e.h)) {
         const playerFalling = player.vy > 120;
         const playerAbove = (player.y + player.h) - e.y < 10;
-        if (playerFalling && playerAbove) {
+        if (e.kind === "ground" && playerFalling && playerAbove) {
           e.alive = false;
           player.vy = -330;
         } else if (player.atkT > 0) {
           e.alive = false;
         } else {
-          killPlayer("Ouch! Enemy got you.\nTap/Click to retry.");
+          stopOverlay("Enemy got you!");
           return;
         }
       }
     }
 
+    // sword hitbox
     if (player.atkT > 0) {
       const reach = 26;
       const hx = player.face > 0 ? (player.x + player.w) : (player.x - reach);
       const hy = player.y + 4;
       const hw = reach;
       const hh = 14;
-
-      for (const e of enemies) {
+      for (const e of level.enemies) {
         if (!e.alive) continue;
-        if (aabb(hx, hy, hw, hh, e.x, e.y, e.w, e.h)) {
-          e.alive = false;
-        }
+        if (aabb(hx, hy, hw, hh, e.x, e.y, e.w, e.h)) e.alive = false;
       }
     }
 
-    if (aabb(player.x, player.y, player.w, player.h, LEVEL.goal.x, LEVEL.goal.y, LEVEL.goal.w, LEVEL.goal.h)) {
-      winLevel();
+    // goal
+    if (aabb(player.x, player.y, player.w, player.h, level.goal.x, level.goal.y, level.goal.w, level.goal.h)) {
+      stopOverlay(`Level clear! 💠 ${player.coins}`);
       return;
     }
 
+    // camera
     const targetX = player.x + player.w/2 - viewW/2;
-    cam.x = clamp(lerp(cam.x, targetX, 0.12), 0, LEVEL.width - viewW);
+    cam.x = clamp(lerp(cam.x, targetX, 0.12), 0, Math.max(0, level.width - viewW));
     cam.y = 0;
 
-    player.animT += dtLocal;
-    for (const e of enemies) e.animT += dtLocal;
+    player.animT += dt;
   }
 
   // ---------- Render ----------
@@ -627,7 +804,6 @@
         drawTile(img, ENV.blockF, p.x + x - cam.x, p.y + y - cam.y, tile, tile);
       }
     }
-
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.fillRect(Math.floor(p.x - cam.x), Math.floor(p.y - cam.y + 1), Math.floor(p.w), 2);
   }
@@ -652,6 +828,8 @@
   }
 
   function render() {
+    if (!level) return;
+
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, viewW, viewH);
 
@@ -663,40 +841,54 @@
       ctx.fillRect(0, y, viewW, 8);
     }
 
-    for (const p of LEVEL.staticPlatforms) drawGround(p);
-    for (const p of LEVEL.movingPlatforms) drawMovingPlatform(p);
+    for (const p of level.staticPlatforms) drawGround(p);
+    for (const p of level.movingPlatforms) drawMovingPlatform(p);
 
-    const env = assets.env;
-    for (const s of LEVEL.spikes) {
-      drawTile(env, ENV.spikeFull, s.x - cam.x, s.y - cam.y, 16, 16);
+    for (const s of level.spikes) {
+      drawTile(assets.env, ENV.spikeFull, s.x - cam.x, s.y - cam.y, 16, 16);
     }
 
-    const gx = Math.floor(LEVEL.goal.x - cam.x);
-    const gy = Math.floor(LEVEL.goal.y - cam.y);
+    // pads
+    for (const pad of level.pads) {
+      const x = Math.floor(pad.x - cam.x);
+      const y = Math.floor(pad.y - cam.y);
+      ctx.fillStyle = "rgba(120, 210, 255, 0.18)";
+      ctx.fillRect(x - 4, y - 2, 24, 12);
+      ctx.strokeStyle = "rgba(120, 210, 255, 0.7)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 4, y - 2, 24, 12);
+    }
+
+    // goal
+    const gx = Math.floor(level.goal.x - cam.x);
+    const gy = Math.floor(level.goal.y - cam.y);
     ctx.fillStyle = "rgba(210, 240, 255, 0.14)";
-    ctx.fillRect(gx, gy, LEVEL.goal.w, LEVEL.goal.h);
+    ctx.fillRect(gx, gy, level.goal.w, level.goal.h);
     ctx.strokeStyle = "rgba(140, 200, 255, 0.85)";
     ctx.lineWidth = 2;
-    ctx.strokeRect(gx + 1, gy + 1, LEVEL.goal.w - 2, LEVEL.goal.h - 2);
+    ctx.strokeRect(gx + 1, gy + 1, level.goal.w - 2, level.goal.h - 2);
     ctx.fillStyle = "rgba(140, 200, 255, 0.22)";
-    ctx.fillRect(gx + 6, gy + 6, LEVEL.goal.w - 12, LEVEL.goal.h - 12);
+    ctx.fillRect(gx + 6, gy + 6, level.goal.w - 12, level.goal.h - 12);
 
-    const sheet = assets.sheet;
-    for (const c of LEVEL.coins) {
+    // coins
+    for (const c of level.coins) {
       if (c.taken) continue;
       const t = performance.now() / 1000;
       const bob = Math.sin(t * 6 + c.x * 0.02) * 2;
       const frame = SPRITES.coin[Math.floor((t * 8) % SPRITES.coin.length)];
-      drawSpriteFrame(sheet, frame, c.x - cam.x, c.y - cam.y + bob, 14, 14, false);
+      drawSpriteFrame(assets.sheet, frame, c.x - cam.x, c.y - cam.y + bob, 14, 14, false);
     }
 
-    for (const e of enemies) {
+    // enemies
+    for (const e of level.enemies) {
       if (!e.alive) continue;
-      const t = e.animT;
-      const frame = SPRITES.enemyIdle[Math.floor((t * 8) % SPRITES.enemyIdle.length)];
-      drawSpriteFrame(sheet, frame, e.x - cam.x, e.y - cam.y, 20, 20, e.dir < 0);
+      const t = e.animT + (performance.now()/1000);
+      const frames = (e.kind === "fly") ? SPRITES.enemyFly : SPRITES.enemyGround;
+      const frame = frames[Math.floor((t * 8) % frames.length)];
+      drawSpriteFrame(assets.sheet, frame, e.x - cam.x, e.y - cam.y, 20, 20, e.dir < 0);
     }
 
+    // player
     const pt = player.animT;
     const moving = Math.abs(player.vx) > 15;
     let pFrame = SPRITES.playerIdle[Math.floor((pt * (moving ? 10 : 6)) % SPRITES.playerIdle.length)];
@@ -704,21 +896,20 @@
       const idx = Math.floor(((player.atkDur - player.atkT) / player.atkDur) * SPRITES.playerAttack.length);
       pFrame = SPRITES.playerAttack[clamp(idx, 0, SPRITES.playerAttack.length - 1)];
     }
-    drawSpriteFrame(sheet, pFrame, player.x - cam.x, player.y - cam.y, 22, 22, player.face < 0);
+    drawSpriteFrame(assets.sheet, pFrame, player.x - cam.x, player.y - cam.y, 22, 22, player.face < 0);
 
+    // slash fx
     if (player.atkT > 0) {
       const prog = (player.atkDur - player.atkT) / player.atkDur;
       const sx = player.face > 0 ? (player.x + 12) : (player.x - 14);
       const sy = player.y + 4;
-
-      const fx = 0;
-      const fy = 48;
+      const fx = 0, fy = 48;
       ctx.save();
       ctx.globalAlpha = 0.85;
       ctx.translate(Math.floor(sx - cam.x), Math.floor(sy - cam.y));
       if (player.face < 0) ctx.scale(-1, 1);
       ctx.rotate((-0.8 + prog * 1.6) * 0.35);
-      ctx.drawImage(sheet, fx, fy, SPR, SPR, 0, 0, 24, 24);
+      ctx.drawImage(assets.sheet, fx, fy, SPR, SPR, 0, 0, 24, 24);
       ctx.restore();
     }
 
@@ -726,9 +917,10 @@
     grd.addColorStop(0, "rgba(0,0,0,0)");
     grd.addColorStop(1, "rgba(0,0,0,0.35)");
     ctx.fillStyle = grd;
-    ctx.fillRect(0,0,viewW,viewH);
+    ctx.fillRect(0, 0, viewW, viewH);
   }
 
+  // ---------- Boot ----------
   async function boot() {
     resize();
     try {
@@ -741,8 +933,5 @@
     }
   }
 
-  (async function main() {
-    await boot();
-  })();
+  boot();
 })();
-
