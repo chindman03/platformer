@@ -51,10 +51,7 @@ canvas#game {
   letter-spacing: 0.5px;
 }
 
-.panel .sub {
-  margin: 0;
-  opacity: 0.9;
-}
+.panel .sub { margin: 0; opacity: 0.9; }
 
 .panel button {
   pointer-events: auto;
@@ -69,7 +66,7 @@ canvas#game {
 }
 
 .panel .hint {
-  max-width: 520px;
+  max-width: 560px;
   opacity: 0.9;
   font-size: 14px;
   line-height: 1.4;
@@ -127,6 +124,13 @@ canvas#game {
   align-items: flex-end;
 }
 
+.mc-vert {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-right: 2px;
+}
+
 .mc-btn {
   width: 60px;
   height: 54px;
@@ -135,6 +139,13 @@ canvas#game {
   background: rgba(130, 210, 255, 0.18);
   color: #e9f3ff;
   font-size: 22px;
+}
+
+.mc-btn.small {
+  width: 54px;
+  height: 44px;
+  font-size: 18px;
+  border-radius: 14px;
 }
 
 .mc-btn.big {
